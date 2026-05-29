@@ -17,7 +17,7 @@ if "chat_complete" not in st.session_state:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-
+# Helper text
 # Helper functions to update session state
 def complete_setup():
     st.session_state.setup_complete = True
