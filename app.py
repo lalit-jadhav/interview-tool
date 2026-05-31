@@ -54,6 +54,8 @@ if not st.session_state.setup_complete:
         st.session_state["position"] = "Data Scientist"
     if "company" not in st.session_state:
         st.session_state["company"] = "Amazon"
+    if "job_description" not in st.session_state:
+        st.session_state["job_description"] = ""
 
     col1, col2 = st.columns(2)
     with col1:
@@ -65,18 +67,11 @@ if not st.session_state.setup_complete:
         )
 
     with col2:
-        st.session_state["position"] = st.selectbox(
-            "Choose a position",
-            ("Data Scientist", "Data Engineer", "ML Engineer", "BI Analyst", "Financial Analyst"),
-            index=("Data Scientist", "Data Engineer", "ML Engineer", "BI Analyst", "Financial Analyst").index(st.session_state["position"])
-        )
+        st.session_state["position"] = st.text_input(label="Position", value=st.session_state["position"], placeholder="Enter position", max_chars=40)
 
-    st.session_state["company"] = st.selectbox(
-        "Select a Company",
-        ("Amazon", "Meta", "Udemy", "365 Company", "Nestle", "LinkedIn", "Spotify"),
-        index=("Amazon", "Meta", "Udemy", "365 Company", "Nestle", "LinkedIn", "Spotify").index(st.session_state["company"])
-    )
+    st.session_state["company"] = st.text_input(label="Company", value=st.session_state["company"], placeholder="Enter company", max_chars=40)
 
+    st.session_state["job_description"] = st.text_area(label="Job Description", value=st.session_state["job_description"], placeholder="Enter job description", max_chars=2000)
 
 
     # Button to complete setup
@@ -104,10 +99,12 @@ if st.session_state.setup_complete and not st.session_state.feedback_shown and n
     if not st.session_state.messages:
         st.session_state.messages = [{
             "role": "system",
-            "content": (f"You are an HR executive that interviews an interviewee called {st.session_state['name']} "
+            "content": (f"You are a technical interviewer that interviews an interviewee called {st.session_state['name']} "
                         f"with experience {st.session_state['experience']} and skills {st.session_state['skills']}. "
                         f"You should interview him for the position {st.session_state['level']} {st.session_state['position']} "
-                        f"at the company {st.session_state['company']}")
+                        f"at the company {st.session_state['company']}"
+                        f"with job description {st.session_state['job_description']}"
+                        f"Start by asking him some questions to gauge his technical knowledge and skills related to the job description.")
         }]
 
     # Display chat messages
