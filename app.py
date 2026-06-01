@@ -3,7 +3,7 @@ from openai import OpenAI
 
 # Setting up the Streamlit page configuration
 st.set_page_config(page_title="StreamlitChatMessageHistory", page_icon="💬")
-st.title("Chatbot")
+st.title("Interview Helper")
 
 # Initialize session state variables
 if "setup_complete" not in st.session_state:
@@ -116,7 +116,7 @@ if st.session_state.setup_complete and not st.session_state.feedback_shown and n
     # Handle user input and OpenAI response
     # Put a max_chars limit
     if st.session_state.user_message_count < 5:
-        if prompt := st.chat_input("Your response", max_chars=1000):
+        if prompt := st.chat_input("Your response", max_chars=2000):
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
