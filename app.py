@@ -2,7 +2,57 @@ import streamlit as st
 from openai import OpenAI
 
 # Setting up the Streamlit page configuration
-st.set_page_config(page_title="StreamlitChatMessageHistory", page_icon="💬")
+st.set_page_config(page_title="Interview Helper", page_icon="💬", layout="wide")
+
+# ── Global styles ──────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+.stApp { background: linear-gradient(135deg, #0f0c29, #302b63, #24243e); color: #e2e8f0; }
+#MainMenu, footer, header { visibility: hidden; }
+.nav-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.6rem 1.2rem;
+    background: rgba(255,255,255,0.05);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px; margin-bottom: 1.5rem;
+    backdrop-filter: blur(10px);
+}
+.nav-title {
+    font-size: 1.3rem; font-weight: 700;
+    background: linear-gradient(90deg, #a78bfa, #60a5fa);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.stButton > button {
+    background: linear-gradient(135deg, #7c3aed, #2563eb) !important;
+    color: white !important; border: none !important;
+    border-radius: 10px !important; font-weight: 600 !important;
+    transition: opacity 0.2s ease !important;
+}
+.stButton > button:hover { opacity: 0.88 !important; }
+.stTextArea textarea, .stTextInput input {
+    background: rgba(255,255,255,0.06) !important;
+    border: 1px solid rgba(255,255,255,0.15) !important;
+    border-radius: 10px !important; color: #e2e8f0 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ── Nav bar ────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="nav-bar">
+    <span class="nav-title">💬 Interview Helper</span>
+    <span style="font-size:0.8rem;color:#64748b;">Powered by GPT-4o-mini</span>
+</div>
+""", unsafe_allow_html=True)
+
+# ── Navigation to Resume Analyzer ─────────────────────────────────────────────
+st.markdown("#### 🚀 Not ready to interview yet?")
+if st.button("📄 Analyze My Resume vs Job Description"):
+    st.switch_page("pages/resume_analyzer.py")
+st.markdown("---")
+
 st.title("Interview Helper")
 
 # Initialize session state variables
