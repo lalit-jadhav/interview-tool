@@ -205,13 +205,15 @@ html, body, [class*="css"] {
 
 # ── Helper: extract text from uploaded file ───────────────────────────────────
 def extract_text(uploaded_file) -> str:
-    """Return plain text from a .txt or .pdf uploaded file."""
+    """Return plain text from a .txt, .pdf, or .docx uploaded file."""
     if uploaded_file is None:
         return ""
     filename = uploaded_file.name.lower()
     raw = uploaded_file.read()
+
     if filename.endswith(".txt"):
         return raw.decode("utf-8", errors="ignore")
+
     elif filename.endswith(".pdf"):
         try:
             import pypdf
@@ -220,8 +222,31 @@ def extract_text(uploaded_file) -> str:
         except ImportError:
             st.error("Install `pypdf` to parse PDFs: `pip install pypdf`")
             return ""
+
+    elif filename.endswith(".docx"):
+        try:
+            from docx import Document
+            doc = Document(io.BytesIO(raw))
+            lines = []
+            # Extract paragraphs (body text, headings, bullet points)
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    lines.append(para.text.strip())
+            # Also extract text from tables (common in resume templates)
+            for table in doc.tables:
+                for row in table.rows:
+                    row_text = "  ".join(
+                        cell.text.strip() for cell in row.cells if cell.text.strip()
+                    )
+                    if row_text:
+                        lines.append(row_text)
+            return "\n".join(lines)
+        except ImportError:
+            st.error("Install `python-docx` to parse DOCX files: `pip install python-docx`")
+            return ""
+
     else:
-        st.warning("Unsupported file type. Please upload a .txt or .pdf file.")
+        st.warning("Unsupported file type. Please upload a PDF, DOCX, or TXT file.")
         return ""
 
 # ── Helper: colour for a score 0-10 ──────────────────────────────────────────
@@ -479,9 +504,9 @@ with st.form("analyzer_form"):
     with col_left:
         st.markdown("#### 👤 Resume")
         resume_file = st.file_uploader(
-            "Upload resume (PDF or TXT)",
-            type=["pdf", "txt"],
-            help="We'll extract text automatically.",
+            "Upload resume (PDF, DOCX or TXT)",
+            type=["pdf", "docx", "txt"],
+            help="We'll extract text automatically from PDF, Word (.docx), or plain text files.",
         )
         resume_text_input = st.text_area(
             "— or paste resume text —",
@@ -543,7 +568,8 @@ if submitted:
                     {"role": "system", "content": "You are an expert recruiter. Always respond with valid JSON only."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.3,
+                temperature=0,   # 0 = deterministic; same input → same score every time
+                seed=42,         # further pins reproducibility where supported
             )
             raw_json = response.choices[0].message.content.strip()
 
