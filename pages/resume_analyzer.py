@@ -200,6 +200,31 @@ html, body, [class*="css"] {
 .stButton > button:hover {
     opacity: 0.88 !important;
 }
+
+/* Batch leaderboard table */
+.batch-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1.5rem;
+}
+.batch-table th {
+    text-align: left;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #64748b;
+    padding: 0.5rem 0.8rem;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.batch-table td {
+    padding: 0.6rem 0.8rem;
+    font-size: 0.88rem;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    vertical-align: middle;
+}
+.batch-table tr:hover td { background: rgba(255,255,255,0.03); }
+.rank-medal { font-size: 1.2rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -478,6 +503,33 @@ def render_dashboard(data: dict, position: str, level: str):
 
 
 
+# ── Helper: call OpenAI and return parsed analysis dict ──────────────────────
+def analyze_resume(client: OpenAI, resume_text: str, jd_text: str,
+                   position: str, level: str) -> dict:
+    """Run a single resume analysis and return the parsed JSON dict."""
+    prompt = build_prompt(resume_text, jd_text, position, level)
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are an expert recruiter. Always respond with valid JSON only."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0,
+        seed=42,
+    )
+    raw = response.choices[0].message.content.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+    data = json.loads(raw)
+    # Enforce score-based recommendation
+    s = data.get("overall_score", 0)
+    data["recommendation"] = "Hire" if s >= 8 else ("Maybe" if s >= 5 else "Pass")
+    return data
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN APP
 # ══════════════════════════════════════════════════════════════════════════════
@@ -494,7 +546,7 @@ st.markdown("""
 if st.button("← Back to Interview Helper"):
     st.switch_page("app.py")
 
-st.markdown("### Paste or upload a resume and a job description to get an instant fit analysis.")
+st.markdown("### Upload one or more resumes and a job description to get an instant fit analysis.")
 st.markdown("---")
 
 # ── Input form ────────────────────────────────────────────────────────────────
@@ -502,16 +554,17 @@ with st.form("analyzer_form"):
     col_left, col_right = st.columns([1, 1], gap="large")
 
     with col_left:
-        st.markdown("#### 👤 Resume")
-        resume_file = st.file_uploader(
-            "Upload resume (PDF, DOCX or TXT)",
+        st.markdown("#### 👤 Resumes")
+        resume_files = st.file_uploader(
+            "Upload resumes (PDF, DOCX or TXT)",
             type=["pdf", "docx", "txt"],
-            help="We'll extract text automatically from PDF, Word (.docx), or plain text files.",
+            accept_multiple_files=True,
+            help="Select one or more resumes. In batch mode all files are scored against the same JD.",
         )
         resume_text_input = st.text_area(
-            "— or paste resume text —",
-            height=220,
-            placeholder="Paste the full resume text here…",
+            "— or paste a single resume —",
+            height=180,
+            placeholder="Paste resume text here (single resume only)…",
         )
 
     with col_right:
@@ -528,7 +581,7 @@ with st.form("analyzer_form"):
         )
         jd_text = st.text_area(
             "Job Description",
-            height=220,
+            height=240,
             placeholder="Paste the full job description here…",
         )
 
@@ -536,17 +589,25 @@ with st.form("analyzer_form"):
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
 if submitted:
-    # Resolve resume text
-    resume_text = ""
-    if resume_file:
-        resume_text = extract_text(resume_file)
-    if not resume_text.strip():
-        resume_text = resume_text_input.strip()
+    # ── Build the list of (filename, resume_text) pairs ──────────────────────
+    resume_items: list[tuple[str, str]] = []
+
+    if resume_files:
+        for f in resume_files:
+            text = extract_text(f)
+            if text.strip():
+                resume_items.append((f.name, text))
+            else:
+                st.warning(f"⚠️ Could not extract text from **{f.name}** — skipping.")
+
+    # Fallback to pasted text if no files uploaded
+    if not resume_items and resume_text_input.strip():
+        resume_items.append(("Pasted Resume", resume_text_input.strip()))
 
     # Validate
     errors = []
-    if not resume_text:
-        errors.append("Please provide a resume (upload or paste).")
+    if not resume_items:
+        errors.append("Please upload at least one resume (or paste resume text).")
     if not jd_text.strip():
         errors.append("Please provide a job description.")
     if not position.strip():
@@ -557,48 +618,101 @@ if submitted:
             st.error(e)
         st.stop()
 
-    with st.spinner("🤖 Analyzing resume… this may take a few seconds…"):
+    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+    is_batch = len(resume_items) > 1
+
+    # ── Run analysis for each resume ─────────────────────────────────────────
+    results: list[tuple[str, dict]] = []   # (filename, data)
+    progress = st.progress(0, text="Preparing analysis…")
+
+    for idx, (fname, rtext) in enumerate(resume_items):
+        progress.progress(
+            (idx) / len(resume_items),
+            text=f"🤖 Analyzing **{fname}** ({idx + 1}/{len(resume_items)})…"
+        )
         try:
-            client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-            prompt = build_prompt(resume_text, jd_text.strip(), position.strip(), level)
-
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an expert recruiter. Always respond with valid JSON only."},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0,   # 0 = deterministic; same input → same score every time
-                seed=42,         # further pins reproducibility where supported
-            )
-            raw_json = response.choices[0].message.content.strip()
-
-            # Strip markdown fences if model wraps in them
-            if raw_json.startswith("```"):
-                raw_json = raw_json.split("```")[1]
-                if raw_json.startswith("json"):
-                    raw_json = raw_json[4:]
-                raw_json = raw_json.strip()
-
-            data = json.loads(raw_json)
-
-            # ── Override model recommendation with score-based rule ───────────
-            # The LLM can be inconsistent; enforce deterministic thresholds.
-            _s = data.get("overall_score", 0)
-            if _s >= 8:
-                data["recommendation"] = "Hire"
-            elif _s >= 5:
-                data["recommendation"] = "Maybe"
-            else:
-                data["recommendation"] = "Pass"
-
+            data = analyze_resume(client, rtext, jd_text.strip(), position.strip(), level)
+            results.append((fname, data))
         except json.JSONDecodeError as e:
-            st.error(f"Could not parse model response as JSON: {e}")
-            st.code(raw_json, language="json")
-            st.stop()
+            st.error(f"**{fname}**: Could not parse model response — {e}")
         except Exception as e:
-            st.error(f"OpenAI API error: {e}")
-            st.stop()
+            st.error(f"**{fname}**: API error — {e}")
+
+    progress.progress(1.0, text="✅ Analysis complete!")
+
+    if not results:
+        st.stop()
 
     st.markdown("---")
-    render_dashboard(data, position.strip(), level)
+
+    # ── Batch: ranked leaderboard table ──────────────────────────────────────
+    if is_batch:
+        # Sort by overall score descending
+        results.sort(key=lambda x: x[1].get("overall_score", 0), reverse=True)
+
+        MEDALS = ["🥇", "🥈", "🥉"]
+        REC_COLORS = {
+            "Hire":  ("#4ade80", "rgba(34,197,94,0.15)"),
+            "Maybe": ("#fbbf24", "rgba(251,191,36,0.15)"),
+            "Pass":  ("#f87171", "rgba(239,68,68,0.15)"),
+        }
+
+        st.markdown(
+            f'<div class="section-title">📋 Candidate Ranking — {len(results)} Resumes'
+            f' · {position.strip()} ({level})</div>',
+            unsafe_allow_html=True
+        )
+
+        rows_html = ""
+        for rank, (fname, d) in enumerate(results):
+            score = d.get("overall_score", 0)
+            rec   = d.get("recommendation", "")
+            txt_c, bg_c = REC_COLORS.get(rec, ("#e2e8f0", "rgba(255,255,255,0.05)"))
+            medal = MEDALS[rank] if rank < 3 else f"#{rank + 1}"
+            tc, _ = score_color(score)
+
+            rows_html += f"""
+            <tr>
+              <td><span class="rank-medal">{medal}</span></td>
+              <td style="font-weight:600;color:#e2e8f0;">{fname}</td>
+              <td style="font-weight:800;color:{tc};font-size:1.05rem;">{score:.1f}<span style="font-size:0.8rem;color:#64748b;">/10</span></td>
+              <td><span style="background:{bg_c};color:{txt_c};border:1px solid {txt_c}44;
+                           border-radius:99px;padding:3px 12px;font-size:0.78rem;font-weight:700;">
+                {rec}</span></td>
+              <td style="color:#94a3b8;font-size:0.82rem;max-width:320px;">
+                {', '.join(d.get('strengths', [])[:2])}
+              </td>
+            </tr>"""
+
+        st.markdown(f"""
+        <div class="glass-card" style="padding:1rem 1.2rem;">
+          <table class="batch-table">
+            <thead>
+              <tr>
+                <th>Rank</th><th>Candidate File</th><th>Score</th>
+                <th>Decision</th><th>Top Strengths</th>
+              </tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+          </table>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="section-title">🔍 Individual Dashboards</div>', unsafe_allow_html=True)
+
+        for rank, (fname, d) in enumerate(results):
+            score = d.get("overall_score", 0)
+            rec   = d.get("recommendation", "")
+            medal = MEDALS[rank] if rank < 3 else f"#{rank + 1}"
+            tc, _ = score_color(score)
+            with st.expander(
+                f"{medal}  {fname}  ·  {score:.1f}/10  ·  {rec}",
+                expanded=(rank == 0),   # auto-expand top candidate
+            ):
+                render_dashboard(d, position.strip(), level)
+
+    # ── Single resume: original full-page dashboard ───────────────────────────
+    else:
+        fname, data = results[0]
+        render_dashboard(data, position.strip(), level)
