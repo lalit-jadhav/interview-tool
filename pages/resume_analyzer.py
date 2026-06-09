@@ -1,7 +1,9 @@
 import streamlit as st
 from openai import OpenAI
+import openai
 import json
 import io
+import time
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -506,25 +508,94 @@ def render_dashboard(data: dict, position: str, level: str):
 # ── Helper: call OpenAI and return parsed analysis dict ──────────────────────
 def analyze_resume(client: OpenAI, resume_text: str, jd_text: str,
                    position: str, level: str) -> dict:
-    """Run a single resume analysis and return the parsed JSON dict."""
+    """Run a single resume analysis and return the parsed JSON dict.
+
+    Raises:
+        ValueError  — on empty API response or missing required JSON keys.
+        RuntimeError — on unrecoverable OpenAI API errors (auth, etc.).
+        Retries once automatically on rate-limit (429).
+    """
     prompt = build_prompt(resume_text, jd_text, position, level)
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are an expert recruiter. Always respond with valid JSON only."},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0,
-        seed=42,
-    )
-    raw = response.choices[0].message.content.strip()
+    messages = [
+        {"role": "system", "content": "You are an expert recruiter. Always respond with valid JSON only."},
+        {"role": "user",   "content": prompt},
+    ]
+
+    # ── API call with targeted error handling ──────────────────────────────
+    for attempt in range(2):   # at most 2 attempts (1 retry on rate-limit)
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0,
+                seed=42,
+            )
+            break  # success — exit retry loop
+
+        except openai.RateLimitError:
+            if attempt == 0:
+                # Wait 20 s then retry once
+                time.sleep(20)
+                continue
+            raise RuntimeError(
+                "OpenAI rate limit reached. Please wait a minute and try again."
+            )
+
+        except openai.AuthenticationError:
+            raise RuntimeError(
+                "Invalid OpenAI API key. Check your .streamlit/secrets.toml."
+            )
+
+        except openai.APITimeoutError:
+            raise RuntimeError(
+                "The request to OpenAI timed out. Check your internet connection and retry."
+            )
+
+        except openai.APIStatusError as e:
+            raise RuntimeError(
+                f"OpenAI API returned an error ({e.status_code}): {e.message}"
+            )
+
+        except openai.APIConnectionError:
+            raise RuntimeError(
+                "Could not connect to OpenAI. Check your internet connection."
+            )
+
+    # ── Validate response has content ─────────────────────────────────────
+    if not response.choices:
+        raise ValueError("OpenAI returned an empty response (no choices).")
+
+    raw = (response.choices[0].message.content or "").strip()
+    if not raw:
+        raise ValueError("OpenAI returned a blank response. Try again.")
+
+    # ── Strip markdown fences if model wraps output ────────────────────────
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
         raw = raw.strip()
-    data = json.loads(raw)
-    # Enforce score-based recommendation
+
+    # ── Parse JSON ─────────────────────────────────────────────────────
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise json.JSONDecodeError(
+            f"Model returned invalid JSON: {e.msg}\n\nRaw response:\n{raw[:500]}",
+            e.doc, e.pos
+        )
+
+    # ── Validate required keys are present ───────────────────────────────
+    required = {"overall_score", "overall_reasoning", "dimensions",
+                "strengths", "gaps", "recommendation"}
+    missing_keys = required - data.keys()
+    if missing_keys:
+        raise ValueError(
+            f"Model response is missing required fields: {missing_keys}. "
+            f"Raw response (first 500 chars):\n{raw[:500]}"
+        )
+
+    # ── Enforce score-based recommendation ───────────────────────────────
     s = data.get("overall_score", 0)
     data["recommendation"] = "Hire" if s >= 8 else ("Maybe" if s >= 5 else "Pass")
     return data
